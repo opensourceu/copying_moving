@@ -27,14 +27,14 @@
 ################################################################################
 
 function usage {
-  echo "Usage: copy_exclude.sh [-f copy_function] [-t] [-h] [-x glob_pattern] src dest"
-  echo "Copy directory with option to exclude files and directories by pattern"
+  echo "Usage: copy_exclude.sh [-f copy_function] [-l] [-t] [-x glob_pattern] [-h] src dest"
+  echo "Copy directory with option to exclude files and directories by pattern, assumes file and directory paths have no spaces or special characters"
   echo
   echo "-f copy_function: use copy_function to perform copy"
   echo "-l: list copy_function names"
   echo "-x glob_pattern: exclude files and directories that match glob pattern"
   echo "-t: create test files and directories to copy"
-  echo "-h | --help: help"
+  echo "-h: help"
   echo "src: source directory"
   echo "dest: destination directory"
   echo
@@ -82,52 +82,104 @@ function doCreateTestData {
 
 function rsync_exclude {
   echo "Copy with rsync exclude option"
-  echo "rsync -a --exclude \"$excludePattern\" $srcdir/ $destdir"
   rsync -a --exclude "$excludePattern" $srcdir/ $destdir
   echo
 }
 
 function rsync_filter {
   echo "Copy with rsync filter option"
-  echo "rsync -a --filter \"- $excludePattern\" $srcdir/ $destdir"
   rsync -a --filter "- $excludePattern" $srcdir/ $destdir
   echo
 }
 
 function tar_exclude {
   echo "Copy with tar exclude option"
-  echo "tar -C $srcdir -c --exclude \"$excludePattern\" . |"
-  echo "tar -C $destdir -x"
   tar -C $srcdir -c --exclude "$excludePattern" . |
   tar -C $destdir -x
   echo
 }
 
-function find_cp {
-  echo "Copy with find and cp"
-  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -exec bash -c '
-    srcdir=$1
-    srcpath=$2
-    destdir=$3
-    relsrc=${srcpath#$srcdir/}
-# create empty directory in destination tree or copy files creating intermediate directories as needed
-    if [[ -d $srcpath ]]; then
-      shopt -s nullglob
-      declare -a contents=($srcpath/*)
-      [[ -z $contents ]] && mkdir $destdir/$relsrc
-    else
-      cd $srcdir &&
-      cp --parents $relsrc $destdir
-    fi
-  ' find-bash $srcdir {} $(realpath $destdir) \;
+function find_tar {
+  echo "Copy with find and tar"
+# print source paths stripped of source tree root
+  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -printf "%P\n" |
+# tar --no-recursion because all paths are explicitly provided on stdin
+  tar -c -C $srcdir --no-recursion -T- |
+  tar -x -C $destdir
   echo
 }
 
-function find_tar {
-  echo "Copy with find and tar"
-  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -printf "%P\n" |
-  tar -c -C $srcdir --no-recursion -T- |
-  tar -x -C $destdir
+function find_cp {
+  echo "Copy with find and cp on each file and directory"
+# no find action taken for directories and files that match exclude pattern
+# non-excluded files and directories are copied with inline script in find
+# inline script takes 3 arguments, source tree to copy from, source path to copy, destination tree to copy to
+  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -exec bash -c '
+# inline script to copy each file and directory from source tree to destination tree
+    srcroot=$1
+    srcpath=$2
+# need absolute path to destination tree for copy to work from different directory
+    destroot=$(realpath $3)
+# strip source root from source path to get relative path to copy to destination tree
+    relsrc=${srcpath#$srcroot/}
+
+    if [[ -d $srcpath ]]; then
+# create empty directory in destination tree
+      shopt -s nullglob
+      declare -a contents=($srcpath/*)
+      [[ -z $contents ]] && mkdir $destroot/$relsrc
+    else
+# copy files creating intermediate directories in destination tree
+      cd $srcroot &&
+      cp --parents $relsrc $destroot
+    fi
+  ' findexec $srcdir {} $destdir \;
+  echo
+}
+
+function find_cp_collect {
+  echo "Copy with find and cp on collected files and directories"
+# no find action taken for directories and files that match exclude pattern
+# non-excluded files and directories are copied with separate inline scripts in find
+# inline scripts take 3 arguments, source tree to copy from, destination tree to copy to, source path to copy
+  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -type d -empty -exec bash -c '
+# inline script to create all empty directories in destination tree
+    srcroot=$1
+    destroot=$2
+    declare -a srcdirs=(${@:3})
+# replace source root with destination root in each source path
+    declare -a destdirs=(${srcdirs[*]/#$srcroot/$destroot})
+
+# create all empty directories with single mkdir
+    mkdir ${destdirs[*]}
+
+  ' findexecplus $srcdir $destdir {} + -o -type f -exec bash -c '
+# inline script to copy all files from source tree to destination tree
+    srcroot=$1
+# need absolute path to destination tree for copy to work from different directory
+    destroot=$(realpath $2)
+    declare -a srcfiles=(${@:3})
+# strip source root from source path to get relative path to copy to destination tree
+    declare -a relsrcs=(${srcfiles[*]/#$srcroot\//})
+
+    cd $srcroot
+# copy all files with single cp
+    cp --parents ${relsrcs[*]} $destroot
+
+  ' findexecplus $srcdir $destdir {} +
+  echo
+}
+
+function checkCopy {
+  echo "Destination directory tree $destdir"
+  echo
+  ls -lAR --color=always $destdir |
+  grep -E --color=always "|(dir|file)_[0-9]+\.nocopy.*"
+  echo
+
+  echo "Diff source and destination directories"
+  echo
+  diff -rq $srcdir $destdir
   echo
 }
 
@@ -135,22 +187,10 @@ declare -a copyFuncs=(
   rsync_exclude
   rsync_filter
   tar_exclude
-  find_cp
   find_tar
+  find_cp
+  find_cp_collect
 )
-
-function checkCopy {
-echo "Destination directory tree $destdir"
-echo
-ls -lAR --color=always $destdir |
-grep -E --color=always "|(dir|file)_[0-9]+\.nocopy.*"
-echo
-
-echo "Diff source and destination directories"
-echo
-diff -rq $srcdir $destdir
-echo
-}
 
 while getopts "f:hltx:" opt; do
   case $opt in
