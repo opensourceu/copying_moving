@@ -26,14 +26,15 @@
 # SOFTWARE.
 ################################################################################
 
+set -o noglob
+
 function usage {
-  echo "Usage: copy_exclude.sh [-f copy_function] [-l] [-t] [-x glob_pattern] [-h] src dest"
-  echo "Copy directory with option to exclude files and directories by pattern, assumes file and directory paths have no spaces or special characters"
+  echo "Usage: copy_exclude.sh [-f copy_function] [-l] [-t] [-x exclude_glob_pattern] [-h] src dest"
+  echo "Copy directory with option to exclude files and directories by pattern, file and directory paths cannot have spaces or special characters, use [[:space:]] in patterns"
   echo
-  echo "-f copy_function: use copy_function to perform copy"
+  echo "-f copy_function: use copy_function to perform copy, default rsync_exclude"
   echo "-l: list copy_function names"
   echo "-x glob_pattern: exclude files and directories that match glob pattern"
-  echo "-t: create test files and directories to copy"
   echo "-h: help"
   echo "src: source directory"
   echo "dest: destination directory"
@@ -47,53 +48,23 @@ function doListCopyFuncs {
   echo "${copyFuncs[*]}"
 }
 
-function doCreateTestData {
-  local testdir=testd
-  local srcdir=$testdir/srcd
-  local destdir=$testdir/destd
-
-  echo "Create test data in directory $testdir"
-  mkdir -p $testdir
-
-  echo "Create source directory $srcdir, destination directory $destdir"
-  mkdir -p $srcdir $destdir
-  echo
-
-  touch $srcdir/file_{1..3}.txt
-  touch $srcdir/file_4.nocopy.txt
-
-  mkdir -p $srcdir/dir_1
-  touch $srcdir/dir_1/file_{5..7}.txt
-  touch $srcdir/dir_1/file_8.nocopy.txt
-
-  mkdir -p $srcdir/dir_1/dir_2.nocopy
-  touch $srcdir/dir_1/dir_2.nocopy/file_9.txt
-
-  mkdir -p $srcdir/dir_3
-
-  mkdir -p $srcdir/dir_4.nocopy
-
-  echo "Source directory tree $srcdir"
-  ls -lAR --color=always $srcdir |
-  grep -E --color=always "|(dir|file)_[0-9]+\.nocopy.*"
-  echo
-
-}
-
 function rsync_exclude {
   echo "Copy with rsync exclude option"
+
   rsync -a --exclude "$excludePattern" $srcdir/ $destdir
   echo
 }
 
 function rsync_filter {
   echo "Copy with rsync filter option"
+
   rsync -a --filter "- $excludePattern" $srcdir/ $destdir
   echo
 }
 
 function tar_exclude {
   echo "Copy with tar exclude option"
+
   tar -C $srcdir -c --exclude "$excludePattern" . |
   tar -C $destdir -x
   echo
@@ -102,7 +73,7 @@ function tar_exclude {
 function find_tar {
   echo "Copy with find and tar"
 # print source paths stripped of source tree root
-  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -printf "%P\n" |
+  find $srcdir -mindepth 1 -name "$excludePattern" -prune -o -printf "%P\n" |
 # tar --no-recursion because all paths are explicitly provided on stdin
   tar -c -C $srcdir --no-recursion -T- |
   tar -x -C $destdir
@@ -114,7 +85,8 @@ function find_cp {
 # no find action taken for directories and files that match exclude pattern
 # non-excluded files and directories are copied with inline script in find
 # inline script takes 3 arguments, source tree to copy from, source path to copy, destination tree to copy to
-  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -exec bash -c '
+# cannot use find -execdir instead of -exec because {} for -execdir is just file or directory name without path from source root needed to create same structure in destination tree
+  find $srcdir -mindepth 1 -name "$excludePattern" -prune -o -exec bash -c '
 # inline script to copy each file and directory from source tree to destination tree
     srcroot=$1
     srcpath=$2
@@ -142,7 +114,7 @@ function find_cp_collect {
 # no find action taken for directories and files that match exclude pattern
 # non-excluded files and directories are copied with separate inline scripts in find
 # inline scripts take 3 arguments, source tree to copy from, destination tree to copy to, source path to copy
-  find $srcdir -mindepth 1 -name "$excludePattern" \( -type d -prune -o -true \) -o -type d -empty -exec bash -c '
+  find $srcdir -mindepth 1 -name "$excludePattern" -prune -o -type d -empty -exec bash -c '
 # inline script to create all empty directories in destination tree
     srcroot=$1
     destroot=$2
@@ -192,16 +164,13 @@ declare -a copyFuncs=(
   find_cp_collect
 )
 
-while getopts "f:hltx:" opt; do
+while getopts "f:hlx:" opt; do
   case $opt in
     f)
       copyFunc=$OPTARG
       ;;
     l)
       listCopyFuncs=true
-      ;;
-    t)
-      createTestData=true
       ;;
     x)
       excludePattern=$OPTARG
@@ -213,17 +182,11 @@ while getopts "f:hltx:" opt; do
 done
 shift $((OPTIND - 1))
 
-: ${createTestData:=false}
 : ${copyFunc:=rsync_exclude}
 : ${listCopyFuncs:=false}
 
 if $listCopyFuncs; then
   doListCopyFuncs
-  exit
-fi
-
-if $createTestData; then
-  doCreateTestData
   exit
 fi
 
