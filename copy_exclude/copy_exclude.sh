@@ -142,19 +142,6 @@ function find_cp_collect {
   echo
 }
 
-function checkCopy {
-  echo "Destination directory tree $destdir"
-  echo
-  ls -lAR --color=always $destdir |
-  grep -E --color=always "|(dir|file)_[0-9]+\.nocopy.*"
-  echo
-
-  echo "Diff source and destination directories"
-  echo
-  diff -rq $srcdir $destdir
-  echo
-}
-
 declare -a copyFuncs=(
   rsync_exclude
   rsync_filter
@@ -209,6 +196,6 @@ if [[ -n $(find $destdir -maxdepth 0 ! -empty) ]]; then
 fi
 
 echo "Copy source directory tree $srcdir to destination directory $destdir, exclude files that match pattern \"$excludePattern\""
+
 $copyFunc
 
-checkCopy

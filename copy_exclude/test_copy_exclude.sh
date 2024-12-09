@@ -94,6 +94,18 @@ function doColorizeInput {
   "
 }
 
+function doCheckCopy {
+  echo "Destination directory tree $destdir"
+  echo
+  ls -lAR --color=always $destdir
+  echo
+
+  echo "Diff source and destination directories"
+  echo
+  diff -rq $srcdir $destdir
+  echo
+}
+
 testdir=testd
 srcdir=$testdir/srcd
 destdir=$testdir/destd
@@ -104,7 +116,7 @@ while getopts "cChp" opt; do
       createTestDir=true
       ;;
     C)
-      colorizeInput=true
+      checkCopy=true
       ;;
     p)
       printTestDir=true
@@ -118,10 +130,12 @@ shift $((OPTIND - 1))
 
 : ${createTestDir:=false}
 : ${printTestDir:=false}
-: ${colorizeInput:=false}
+: ${checkCopy:=false}
 
-if $colorizeInput; then
+if $checkCopy; then
+  doCheckCopy |
   doColorizeInput
+
   exit
 fi
 
